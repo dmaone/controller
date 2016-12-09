@@ -102,6 +102,8 @@ typedef enum Type {
 	Type_StrobeSetup,
 	Type_Sense,
 	Type_SenseSetup,
+    Type_AnalogSenseOn,
+    Type_AnalogSenseOff,
 } Type;
 
 // Sense/Strobe configuration
@@ -157,6 +159,8 @@ inline uint8_t keyOn(/*KeyPosition*/uint8_t st)
 
 void Matrix_setup();
 void Matrix_scan( uint16_t scanNum );
+void Matrix_sense(uint8_t enable);
+void Matrix_strobe(uint8_t pin, uint8_t enable);
 
 void Matrix_currentChange( unsigned int current );
 

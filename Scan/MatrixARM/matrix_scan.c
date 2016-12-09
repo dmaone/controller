@@ -134,6 +134,7 @@ uint8_t Matrix_pin( GPIO_Pin gpio, Type type )
 		*GPIO_PCOR |= (1 << gpio.pin);
 		*GPIO_PDDR |= (1 << gpio.pin);  // output, low
 		#else
+		*GPIO_PDDR |= (1 << gpio.pin);  // output, low
 		*GPIO_PSOR |= (1 << gpio.pin);
 		#endif
 		break;
@@ -143,6 +144,7 @@ uint8_t Matrix_pin( GPIO_Pin gpio, Type type )
 		// Ghosting martix needs to put not used (off) strobes in high impedance state
 		*GPIO_PDDR &= ~(1 << gpio.pin);  // input, high Z state
 		#endif
+		*GPIO_PDDR |= (1 << gpio.pin);  // output, low
 		*GPIO_PCOR |= (1 << gpio.pin);
 		break;
 
@@ -196,14 +198,64 @@ uint8_t Matrix_pin( GPIO_Pin gpio, Type type )
 			*PORT_PCR |= PORT_PCR_PE;
 			break;
 
-		// Do nothing otherwise
-		default:
+		case Config_Opendrain:
+			*PORT_PCR |= PORT_PCR_ODE;
 			break;
 		}
+		break;
+
+	case Type_AnalogSenseOn:
+		*PORT_PCR = PORT_PCR_MUX(0);
+		*GPIO_PDDR &= ~(1 << gpio.pin);  // input, high Z state
+		break;
+
+	case Type_AnalogSenseOff:
+		// Pull resistor config
+		switch ( Matrix_type )
+		{
+		case Config_Pullup:
+			*PORT_PCR |= PORT_PCR_PE | PORT_PCR_PS;
+			break;
+
+		case Config_Pulldown:
+			*PORT_PCR |= PORT_PCR_PE;
+			break;
+
+		case Config_Opendrain:
+			*PORT_PCR |= PORT_PCR_ODE;
+			break;
+		}
+		*GPIO_PCOR |= (1 << gpio.pin);
+		*GPIO_PDDR |= (1 << gpio.pin);  // output, low
+		// Configure pin with slow slew, high drive strength and GPIO mux
+		*PORT_PCR = PORT_PCR_SRE | PORT_PCR_DSE | PORT_PCR_MUX(1);
 		break;
 	}
 
 	return 0;
+}
+
+void Matrix_sense(uint8_t enable)
+{
+	for (uint8_t pin = 0; pin < Matrix_colsNum; pin++)
+	{
+		if (enable)
+		{
+			Matrix_pin( Matrix_rows[ pin ], Type_AnalogSenseOn );
+		} else {
+			Matrix_pin( Matrix_rows[ pin ], Type_AnalogSenseOff );
+		}
+	}
+}
+
+void Matrix_strobe(uint8_t pin, uint8_t enable)
+{
+	if (enable)
+	{
+		Matrix_pin( Matrix_cols[ pin ], Type_StrobeOn );
+	} else {
+		Matrix_pin( Matrix_cols[ pin ], Type_StrobeOff );
+	}
 }
 
 // Setup GPIO pins for matrix scanning
@@ -666,4 +718,4 @@ void cliFunc_matrixState( char* args )
 		matrixDebugStateCounter = (uint16_t)numToInt( arg1Ptr );
 	}
 }
-
+// vim:ts=8:sts=8:sw=8:noet
