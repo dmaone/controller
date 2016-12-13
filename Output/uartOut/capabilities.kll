@@ -24,7 +24,7 @@ toggleKbdProtocol => Output_toggleKbdProtocol_capability();
 # By default this is disabled on purpose
 # It is a large security hazard
 flashModeEnabled => flashModeEnabled_define;
-flashModeEnabled = 0;
+flashModeEnabled = 1;
 
 flashMode => Output_flashMode_capability();
 

@@ -11,7 +11,7 @@
 
 # Feel free to change the variables in this section to configure your keyboard
 
-BuildPath="f122"
+BuildPath="build"
 
 ## KLL Configuration ##
 
@@ -45,7 +45,7 @@ PartialMaps[2]="colemak"
 # Keyboard Module Configuration
 ScanModule="CommonSense"
 MacroModule="PartialMap"
-OutputModule="pjrcUSB"
+OutputModule="uartOut"
 DebugModule="full"
 
 # Microcontroller

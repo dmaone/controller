@@ -124,6 +124,7 @@ uint8_t Matrix_pin( GPIO_Pin gpio, Type type )
 	#endif
 	volatile unsigned int *GPIO_PCOR = (unsigned int*)(&GPIOA_PCOR) + gpio_offset;
 	volatile unsigned int *GPIO_PDIR = (unsigned int*)(&GPIOA_PDIR) + gpio_offset;
+	volatile unsigned int *GPIO_PDOR = (unsigned int*)(&GPIOA_PDIR) + gpio_offset;
 	volatile unsigned int *PORT_PCR  = (unsigned int*)(&PORTA_PCR0) + port_offset;
 
 	// Operation depends on Type
@@ -206,10 +207,13 @@ uint8_t Matrix_pin( GPIO_Pin gpio, Type type )
 
 	case Type_AnalogSenseOn:
 		*PORT_PCR = PORT_PCR_MUX(0);
-		*GPIO_PDDR &= ~(1 << gpio.pin);  // input, high Z state
+		*GPIO_PDIR |= (1 << gpio.pin);  // input, high Z state
 		break;
 
 	case Type_AnalogSenseOff:
+		// Configure pin with slow slew, high drive strength and GPIO mux
+		*PORT_PCR = PORT_PCR_PFE | PORT_PCR_SRE | PORT_PCR_DSE | PORT_PCR_MUX(1);
+
 		// Pull resistor config
 		switch ( Matrix_type )
 		{
@@ -225,10 +229,8 @@ uint8_t Matrix_pin( GPIO_Pin gpio, Type type )
 			*PORT_PCR |= PORT_PCR_ODE;
 			break;
 		}
-		*GPIO_PCOR |= (1 << gpio.pin);
-		*GPIO_PDDR |= (1 << gpio.pin);  // output, low
-		// Configure pin with slow slew, high drive strength and GPIO mux
-		*PORT_PCR = PORT_PCR_SRE | PORT_PCR_DSE | PORT_PCR_MUX(1);
+		*GPIO_PDOR |= (1 << gpio.pin);  // output
+		*GPIO_PCOR |= (1 << gpio.pin);  // low
 		break;
 	}
 

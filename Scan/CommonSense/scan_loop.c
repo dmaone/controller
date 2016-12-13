@@ -59,13 +59,24 @@ CLIDict_Def( scanCLIDict, "Scan Module Commands" ) = {
 // Number of scans since the last USB send
 uint16_t Scan_scanCount = 0;
 
-volatile uint8_t Conversions_complete = 0;
+volatile uint8_t CoCo1 = 0;
+volatile uint8_t CoCo2 = 0;
 
 // ADC-related stuff
-#define ADC0_CHAN_COUNT 8
-#define ADC1_CHAN_COUNT 8
-unsigned char adc0_sequencer[ADC0_CHAN_COUNT] = {4, 15, 7, 6, 12, 13, 14, 5};
-unsigned char adc1_sequencer[ADC1_CHAN_COUNT] = {9, 8, 5, 4, 6, 7, 0 ,3};
+#define ADC0_CHAN_COUNT 16
+#define ADC1_CHAN_COUNT 16
+uint8_t adc0_sequencer[ADC0_CHAN_COUNT] = {
+	 4, 19|ADC_SC1_AIEN, 15|ADC_SC1_AIEN, 19|ADC_SC1_AIEN,   7, 19,  6, 19,
+	12, 19, 13, 19,  14, 19,  5, 19
+//	 4, 19, 15, 19,   7, 19,  6, 19,
+//	12, 19, 13, 19,  14, 19,  5, 19
+};
+uint8_t adc1_sequencer[ADC1_CHAN_COUNT] = {
+	19, 19, 19, 19,  19, 19, 19, 19,
+	19, 19, 19, 19,  19, 19, 19, 19
+//	19,  9, 19,  8,  19,  5, 19,  4,
+//	19,  6, 19,  7,  19,  0 ,19,  3
+};
 
 volatile uint8_t adc0_results[ADC0_CHAN_COUNT] = {1, 2, 3, 4, 5, 6, 7, 8};
 volatile uint8_t adc1_results[ADC1_CHAN_COUNT] = {3, 3, 3, 3, 4, 5, 6, 7};
@@ -105,9 +116,9 @@ volatile uint8_t adc1_results[ADC1_CHAN_COUNT] = {3, 3, 3, 3, 4, 5, 6, 7};
  * SC2 = internal Vref (=1)
 */
 #define ADC_SETUP(mod)\
-	ADC##mod##_CFG1 = ADC_CFG1_ADIV(0) | ADC_CFG1_MODE(2) | ADC_CFG1_ADICLK(3);\
+	ADC##mod##_CFG1 = ADC_CFG1_ADIV(8) | ADC_CFG1_MODE(1) | ADC_CFG1_ADICLK(3) /*| ADC_CFG1_ADLSMP*/;\
 	ADC##mod##_CFG2 	= ADC_CFG2_MUXSEL | ADC_CFG2_ADACKEN \
-			| ADC_CFG2_ADHSC | ADC_CFG2_ADLSTS(0); \
+			| ADC_CFG2_ADHSC | ADC_CFG2_ADLSTS(2); \
 	ADC##mod##_SC3 = 0u; \
 	ADC##mod##_SC2	= ADC_SC2_DMAEN | 0x01u; \
 
@@ -159,14 +170,18 @@ volatile uint8_t adc1_results[ADC1_CHAN_COUNT] = {3, 3, 3, 3, 4, 5, 6, 7};
 
 void dma_ch1_isr(void)
 {
+	cli();
 	DMA_CINT |= DMA_CINT_CINT(1);
-	Conversions_complete++;
+	CoCo1 = 1;
+	sei();
 }
 
 void dma_ch3_isr(void)
 {
+	cli();
 	DMA_CINT |= DMA_CINT_CINT(3);
-	Conversions_complete++;
+	CoCo2 = 1;
+	sei();
 }
 
 #define SENSOR_SETUP(idx, ch_count, seq_tcd, res_tcd) \
@@ -185,8 +200,8 @@ uint8_t ADC_Setup()
 	SENSOR_SETUP(0, ADC0_CHAN_COUNT, 0, 1)
 
 	// ADC1 - DMA channels 2(seq) and 3(results)
-	SENSOR_SETUP(1, ADC1_CHAN_COUNT, 2, 3)
-	Conversions_complete = 0;
+	//SENSOR_SETUP(1, ADC1_CHAN_COUNT, 2, 3)
+	CoCo1 = 0; CoCo2 = 0;
 	return 0;
 }
 
@@ -229,8 +244,8 @@ inline uint8_t Scan_loop()
 		delay(25);
 		START_DMA(2)
 		delay(25);
-		while (Conversions_complete < 2) {delay(1);};
-		Conversions_complete = 0;
+		while (CoCo1 + CoCo2 < 2) {};
+		CoCo1 = CoCo2 = 0;
 		delay(200);
 		Matrix_sense(0);
 		Matrix_strobe(i, 0);
@@ -347,23 +362,49 @@ void Scan_currentChange( unsigned int current )
 void cliFunc_T( char* args )
 {
 	print( NL );
-	for (uint8_t j = 0; j < 1000; j++)
+	for (uint32_t j = 0; j < 1; j++)
 	{
 	for (uint8_t i = 0; i < 8; i++)
 	{
-		print( " Starting conversion");
 		Matrix_sense(1);
 		Matrix_strobe(i, 1);
+		//delayMicroseconds(100);
+		CoCo1 = 0; CoCo2 = 0;
+		uint32_t c1 = 1000;
+		uint32_t c2 = 1000;
+		//START_DMA(2)
 		START_DMA(0)
-		delay(5);
-		START_DMA(2)
-		while (Conversions_complete < 2) {};
-		Conversions_complete = 0;
+		//while (c > 0 && CoCo1 + CoCo2 < 2) {c--;};
+		while (c1 > 0 && CoCo1 == 0) {c1--;};
+		//while (c2 > 0 && CoCo2 == 0) {c2--;};
+		if (c1 == 0 || c2 == 0)
+		{
+			print( "\n\n\n\n!!!!\n" );
+			printHex( DMA_TCD0_CITER_ELINKNO);
+			print( " " );
+			printHex( DMA_TCD1_CITER_ELINKNO);
+			print( " " );
+			printHex( DMA_TCD2_CITER_ELINKNO);
+			print( " " );
+			printHex( DMA_TCD3_CITER_ELINKNO);
+			print( NL );
+			printInt32( j );
+			print( " " );
+			printInt32( i );
+			print( " " );
+			printInt32(c1);
+			print( " " );
+			printInt32(c2);
+			print( "\n\n\n");
+		}
 		Matrix_sense(0);
 		Matrix_strobe(i, 0);
-		delay(50);
-		print( " done\n" );
 		cliFunc_ADCPrint("");
+		delayMicroseconds(100);
+	}
+	if (j % 1000 == 0)
+	{
+		print ( ".");
 	}
 	//delay(200);
 	}
@@ -394,6 +435,8 @@ void cliFunc_ADCPrint( char* args )
 		adc1_results[i] = i;
 		print (" ");
 	}
+	print( NL );
+	printHex(ADC0_SC1A);
 	print( NL );
 }
 
@@ -427,4 +470,4 @@ void cliFunc_ADCCal( char* args )
 	printADCCalData();
 }
 
-// vim:ts=8:sts=8:sw=8:noet
+// vim:ts=8:sts=8:sw=8:noet:

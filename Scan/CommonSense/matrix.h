@@ -40,7 +40,7 @@
 // Teensy layout is STUPID. Avoid using it if you can.
 //
 // Rows (Strobe)
-//  3 2 7 8 9 10 11 12
+//  3 2 7 8 0 1 11 12
 // PTA12 PTD0 PTD2 PTD3 PTC3 PTC4 PTC6 PTC7
 //
 // Columns (Sense)
@@ -61,7 +61,7 @@ GPIO_Pin Matrix_rows[] = {
 
 GPIO_Pin Matrix_cols[] = {
 	gpio(A,12), gpio(D,0), gpio(D,2), gpio(D,3),
-	gpio(C,3), gpio(C,4), gpio(C,6), gpio(C,7)
+	gpio(C,3), gpio(C, 4), gpio(C,6), gpio(C,7)
 };
 
 Config Matrix_type = Config_Pulldown;
