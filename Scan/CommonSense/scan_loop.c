@@ -19,6 +19,24 @@
  * THE SOFTWARE.
  */
 
+// IMPORTANT NOTE from DMA
+/*
+ * Don't even try to use DMA with ADC software activation.
+ * becaise it will fuck up results transfer.
+ * You see, there's _supposed_ to be an ADC results buffer in K20,
+ * but there's none.
+ * So conversion start immediately fills ADCx_Rn with garbage.
+ * You need to wait 3 full microseconds after conversion ends
+ * before you can write to SC1n.
+ * And DMA request is generated when? You guessed right, when COCO is asserted.
+ * So you only scoop garbage from ADC_Rn.
+ *
+ * Chaining another DMA channel to write to ADCxSC1n AN4590-style works.
+ * The only problem is you only get garbage instead of results.
+ * Oh, and AN4590 itself has TONS of errors.
+ * I didn't try to compile the sample project,
+ * but if you paste texts from PDF - you're up to an unpleasant surprise.)
+ */
 // ----- Includes -----
 
 // Compiler Includes
@@ -65,21 +83,23 @@ volatile uint8_t CoCo2 = 0;
 // ADC-related stuff
 #define ADC0_CHAN_COUNT 16
 #define ADC1_CHAN_COUNT 16
-uint8_t adc0_sequencer[ADC0_CHAN_COUNT] = {
-	 4, 19|ADC_SC1_AIEN, 15|ADC_SC1_AIEN, 19|ADC_SC1_AIEN,   7, 19,  6, 19,
-	12, 19, 13, 19,  14, 19,  5, 19
-//	 4, 19, 15, 19,   7, 19,  6, 19,
-//	12, 19, 13, 19,  14, 19,  5, 19
+uint8_t adc1_sequencer[ADC0_CHAN_COUNT] = {
+	 0, 30, 1, 30,   2, 30,  3, 30,
+	4, 30, 5, 30,  6, 30,  7, 30
+//	 4, 30, 15, 30,   7, 30,  6, 30,
+//	12, 30, 13, 30,  14, 30,  5, 30
 };
-uint8_t adc1_sequencer[ADC1_CHAN_COUNT] = {
-	19, 19, 19, 19,  19, 19, 19, 19,
-	19, 19, 19, 19,  19, 19, 19, 19
-//	19,  9, 19,  8,  19,  5, 19,  4,
-//	19,  6, 19,  7,  19,  0 ,19,  3
+uint8_t adc0_sequencer[ADC1_CHAN_COUNT] = {
+	30,  0, 30,  2,  30,  3, 30,  4,
+	30,  4, 30,  5,  30,  6, 30,  7,
+//	30,  6, 30,  7,  30,  0 ,30,  3
+//	30,  6, 30,  7,  30,  0 ,30,  3
 };
 
-volatile uint8_t adc0_results[ADC0_CHAN_COUNT] = {1, 2, 3, 4, 5, 6, 7, 8};
-volatile uint8_t adc1_results[ADC1_CHAN_COUNT] = {3, 3, 3, 3, 4, 5, 6, 7};
+volatile uint16_t adc0_results[8][ADC0_CHAN_COUNT];
+volatile uint16_t adc0_results_prev[8][ADC0_CHAN_COUNT];
+volatile uint16_t adc1_results[8][ADC0_CHAN_COUNT];
+volatile uint16_t adc1_results_prev[8][ADC0_CHAN_COUNT];
 // ----- Functions -----
 
 /*
@@ -116,98 +136,30 @@ volatile uint8_t adc1_results[ADC1_CHAN_COUNT] = {3, 3, 3, 3, 4, 5, 6, 7};
  * SC2 = internal Vref (=1)
 */
 #define ADC_SETUP(mod)\
-	ADC##mod##_CFG1 = ADC_CFG1_ADIV(8) | ADC_CFG1_MODE(1) | ADC_CFG1_ADICLK(3) /*| ADC_CFG1_ADLSMP*/;\
+	ADC##mod##_CFG1 = ADC_CFG1_ADIV(1) | ADC_CFG1_MODE(2) | ADC_CFG1_ADICLK(1) /*| ADC_CFG1_ADLSMP*/ ;\
 	ADC##mod##_CFG2 	= ADC_CFG2_MUXSEL | ADC_CFG2_ADACKEN \
 			| ADC_CFG2_ADHSC | ADC_CFG2_ADLSTS(2); \
 	ADC##mod##_SC3 = 0u; \
-	ADC##mod##_SC2	= ADC_SC2_DMAEN | 0x01u; \
+	ADC##mod##_SC2 = 0x01u; \
 
-/* Command sequencer
- * MUX source doesn't matter, we don't enable requests from it.
- */
-#define DMA_SEQUENCER(adcidx, bufsz, tcd) \
-	DMAMUX0_CHCFG##tcd	= DMAMUX_ENABLE | DMAMUX_SOURCE_ALWAYS##tcd; \
-	DMA_TCD##tcd##_SADDR	= &adc##adcidx##_sequencer; \
-	DMA_TCD##tcd##_SOFF	= 1; \
-	DMA_TCD##tcd##_SLAST	= -(bufsz); \
-	DMA_TCD##tcd##_DADDR	= &ADC##adcidx##_SC1A; \
-	DMA_TCD##tcd##_DOFF 	= 0; \
-	DMA_TCD##tcd##_DLASTSGA = 0; \
-	DMA_TCD##tcd##_NBYTES_MLNO = 1; \
-	DMA_TCD##tcd##_BITER_ELINKNO = ((bufsz) & DMA_TCD_BITER_MASK); \
-	DMA_TCD##tcd##_CITER_ELINKNO = DMA_TCD##tcd##_BITER_ELINKNO; /* Current = start */ \
-	DMA_TCD##tcd##_ATTR	= DMA_TCD_ATTR_SSIZE(DMA_TCD_ATTR_SIZE_8BIT) \
-			| DMA_TCD_ATTR_DSIZE(DMA_TCD_ATTR_SIZE_8BIT); \
-	DMA_TCD##tcd##_CSR	= 0; \
-
-/*
- * Results transporter. CAN ONLY BE ONE OF THE LOWER 4 TCDs on mk20dx128!
- * No link at the end of the loop - we started sequencer manually.
- * So it's at initial position at the end of our major loop.
- */
-#define DMA_RESULT_GATHERER(adcidx, bufsz, tcd, seqc) \
-	DMAMUX0_CHCFG##tcd	= DMAMUX_ENABLE | DMAMUX_SOURCE_ADC##adcidx; \
-	DMA_TCD##tcd##_SADDR	= &ADC##adcidx##_RA; \
-	DMA_TCD##tcd##_SOFF	= 0; \
-	DMA_TCD##tcd##_SLAST	= 0; \
-	DMA_TCD##tcd##_DADDR	= &adc##adcidx##_results; \
-	DMA_TCD##tcd##_DOFF	= 1; \
-	DMA_TCD##tcd##_DLASTSGA = -(bufsz); \
-	DMA_TCD##tcd##_NBYTES_MLNO = 1; \
-	DMA_TCD##tcd##_BITER_ELINKYES = DMA_TCD_BITER_ELINK \
-				| ((seqc << 9) & 0x1E00u) \
-				| ((bufsz) & DMA_TCD_BITER_MASK); \
-	DMA_TCD##tcd##_CITER_ELINKYES = DMA_TCD##tcd##_BITER_ELINKYES; /*Current = start */ \
-	DMA_TCD##tcd##_ATTR	= DMA_TCD_ATTR_SSIZE(DMA_TCD_ATTR_SIZE_8BIT) \
-			| DMA_TCD_ATTR_DSIZE(DMA_TCD_ATTR_SIZE_8BIT); \
-	DMA_TCD##tcd##_CSR	= DMA_TCD_CSR_INTMAJOR; \
-	NVIC_ENABLE_IRQ(IRQ_DMA_CH##tcd); \
-	DMA_ERQ		|= DMA_ERQ_ERQ##tcd;
-
-#define START_DMA(idx) \
-	DMA_TCD##idx##_CITER_ELINKNO = DMA_TCD##idx##_BITER_ELINKNO; \
-	DMA_TCD##idx##_CSR |= DMA_TCD_CSR_START; \
-
-void dma_ch1_isr(void)
-{
-	cli();
-	DMA_CINT |= DMA_CINT_CINT(1);
-	CoCo1 = 1;
-	sei();
-}
-
-void dma_ch3_isr(void)
-{
-	cli();
-	DMA_CINT |= DMA_CINT_CINT(3);
-	CoCo2 = 1;
-	sei();
-}
-
-#define SENSOR_SETUP(idx, ch_count, seq_tcd, res_tcd) \
+#define SENSOR_SETUP(idx) \
 	ADC_CALIBRATE(idx) \
 	ADC_SETUP(idx) \
-	DMA_SEQUENCER(idx, ch_count, seq_tcd) \
-	DMA_RESULT_GATHERER(idx, ch_count, res_tcd, seq_tcd) \
 
+// Calibration macro returns 255 on calibration fail.
+// Dunno, may be remove that and integrate into Scan_setup
 uint8_t ADC_Setup()
 {
 	// Power
 	SIM_SCGC3 |= SIM_SCGC3_ADC1;
-	SIM_SCGC6 |= SIM_SCGC6_DMAMUX | SIM_SCGC6_ADC0;
-	SIM_SCGC7 |= SIM_SCGC7_DMA;
-	// ADC0 - DMA channels 0(seq) and 1(results)
-	SENSOR_SETUP(0, ADC0_CHAN_COUNT, 0, 1)
+	SIM_SCGC6 |= SIM_SCGC6_ADC0;
 
-	// ADC1 - DMA channels 2(seq) and 3(results)
-	//SENSOR_SETUP(1, ADC1_CHAN_COUNT, 2, 3)
-	CoCo1 = 0; CoCo2 = 0;
+	ADC_CALIBRATE(0)
+	ADC_SETUP(0)
+
+	ADC_CALIBRATE(1)
+	ADC_SETUP(1)
 	return 0;
-}
-
-inline void PIN_Setup()
-{
-	SIM_SCGC5 |= SIM_SCGC5_PORTA | SIM_SCGC5_PORTB | SIM_SCGC5_PORTC | SIM_SCGC5_PORTD | SIM_SCGC5_PORTE;
 }
 
 // Setup
@@ -226,32 +178,36 @@ inline void Scan_setup()
 
 	// Vref: VREFEN + REGEN + ICOMPEN + MODE_LV=1 (high power, 2 is low)
 	VREF_SC = 0x80u + 0x40u + 0x20u + 0x01u;
+
+	//SIM_SCGC5 |= SIM_SCGC5_PORTA | SIM_SCGC5_PORTB | SIM_SCGC5_PORTC | SIM_SCGC5_PORTD | SIM_SCGC5_PORTE;
+
 	ADC_Setup();
-	PIN_Setup();
 }
 
 // Main Detection Loop
 inline uint8_t Scan_loop()
 {
-	/*
-	sei(); // Give it back, main thread!
-	for (uint8_t i=0; i < 8; i++)
+	for (uint8_t i = 0; i < 8; i++)
 	{
 		Matrix_sense(1);
 		Matrix_strobe(i, 1);
-		delay(5);
-		START_DMA(0)
-		delay(25);
-		START_DMA(2)
-		delay(25);
-		while (CoCo1 + CoCo2 < 2) {};
-		CoCo1 = CoCo2 = 0;
-		delay(200);
+		//printInt32( SYST_CVR );
+		for (uint8_t k = 0; k < ADC0_CHAN_COUNT; k++)
+		{
+			ADC0_SC1A = adc0_sequencer[k];
+			ADC1_SC1A = adc1_sequencer[k];
+			while (!(ADC0_SC1A && ADC_SC1_COCO)){};
+			adc0_results[i][k] = (uint16_t)ADC0_RA >> 1;
+			while (!(ADC1_SC1A && ADC_SC1_COCO)){};
+			adc1_results[i][k] = (uint16_t)ADC1_RA >> 1;
+			delayMicroseconds(3);
+		}
 		Matrix_sense(0);
 		Matrix_strobe(i, 0);
+		delayMicroseconds(3); // Give it time to settle down
 	}
-	Matrix_scan( Scan_scanCount++ );
-	*/
+	// Not ready for prime time.
+	//Matrix_scan( Scan_scanCount++ );
 	return 0;
 }
 
@@ -361,52 +317,33 @@ void Scan_currentChange( unsigned int current )
 // ----- CLI Command Functions -----
 void cliFunc_T( char* args )
 {
+	// Test the scan loop (at max speed or general debugging)
 	print( NL );
-	for (uint32_t j = 0; j < 1; j++)
+	for (uint32_t j = 0; j < 100000; j++)
 	{
-	for (uint8_t i = 0; i < 8; i++)
-	{
-		Matrix_sense(1);
-		Matrix_strobe(i, 1);
-		//delayMicroseconds(100);
-		CoCo1 = 0; CoCo2 = 0;
-		uint32_t c1 = 1000;
-		uint32_t c2 = 1000;
-		//START_DMA(2)
-		START_DMA(0)
-		//while (c > 0 && CoCo1 + CoCo2 < 2) {c--;};
-		while (c1 > 0 && CoCo1 == 0) {c1--;};
-		//while (c2 > 0 && CoCo2 == 0) {c2--;};
-		if (c1 == 0 || c2 == 0)
+		for (uint8_t i = 0; i < 8; i++)
 		{
-			print( "\n\n\n\n!!!!\n" );
-			printHex( DMA_TCD0_CITER_ELINKNO);
-			print( " " );
-			printHex( DMA_TCD1_CITER_ELINKNO);
-			print( " " );
-			printHex( DMA_TCD2_CITER_ELINKNO);
-			print( " " );
-			printHex( DMA_TCD3_CITER_ELINKNO);
-			print( NL );
-			printInt32( j );
-			print( " " );
-			printInt32( i );
-			print( " " );
-			printInt32(c1);
-			print( " " );
-			printInt32(c2);
-			print( "\n\n\n");
+			Matrix_sense(1);
+			Matrix_strobe(i, 1);
+			for (uint8_t k = 0; k < ADC0_CHAN_COUNT; k++)
+			{
+				ADC0_SC1A = adc0_sequencer[k];
+				ADC1_SC1A = adc1_sequencer[k];
+				while (!(ADC0_SC1A && ADC_SC1_COCO)){};
+				adc0_results[i][k] = (uint16_t)ADC0_RA >> 1;
+				while (!(ADC1_SC1A && ADC_SC1_COCO)){};
+				adc1_results[i][k] = (uint16_t)ADC1_RA >> 1;
+				delayMicroseconds(3);
+			}
+			Matrix_sense(0);
+			Matrix_strobe(i, 0);
+			delayMicroseconds(3); // Give it time to settle down
 		}
-		Matrix_sense(0);
-		Matrix_strobe(i, 0);
-		cliFunc_ADCPrint("");
-		delayMicroseconds(100);
-	}
-	if (j % 1000 == 0)
-	{
-		print ( ".");
-	}
-	//delay(200);
+		//cliFunc_ADCPrint("");
+		if (j % 1000 == 0)
+		{
+			print ( ".");
+		}
 	}
 
 }
@@ -414,30 +351,29 @@ void cliFunc_T( char* args )
 void cliFunc_ADCPrint( char* args )
 {
 	print( NL );
-	printHex( DMA_TCD0_CITER_ELINKNO);
-	print( " " );
-	printHex( DMA_TCD1_CITER_ELINKNO);
-	print( " " );
-	printHex( DMA_TCD2_CITER_ELINKNO);
-	print( " " );
-	printHex( DMA_TCD3_CITER_ELINKNO);
-	print( " " );
-	for (uint8_t i=0; i < ADC0_CHAN_COUNT; i++)
+	for (uint8_t j=0; j < 8; j++)
 	{
-		printInt8(adc0_results[i]);
-		adc0_results[i] = i;
-		print (" ");
+		for (uint8_t i=0; i < ADC0_CHAN_COUNT; i+=2)
+		{
+			if (adc0_results[j][i] - adc0_results_prev[j][i] < 0)
+				print("!");
+			else
+				printInt16(adc0_results[j][i] - adc0_results_prev[j][i]);
+			adc0_results_prev[j][i] = adc0_results[j][i];
+			print (" ");
+		}
+		print (" | ");
+		for (uint8_t i=1; i < ADC1_CHAN_COUNT; i+=2)
+		{
+			if (adc1_results[j][i] - adc1_results_prev[j][i] < 0)
+				print("!");
+			else
+				printInt16(adc1_results[j][i] - adc1_results_prev[j][i]);
+			adc1_results_prev[j][i] = adc1_results[j][i];
+			print (" ");
+		}
+		print( NL );
 	}
-	print ("| ");
-	for (uint8_t i=0; i < ADC1_CHAN_COUNT; i++)
-	{
-		printInt8(adc1_results[i]);
-		adc1_results[i] = i;
-		print (" ");
-	}
-	print( NL );
-	printHex(ADC0_SC1A);
-	print( NL );
 }
 
 inline void printADCCalData( void )
