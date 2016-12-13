@@ -83,17 +83,13 @@ volatile uint8_t CoCo2 = 0;
 // ADC-related stuff
 #define ADC0_CHAN_COUNT 16
 #define ADC1_CHAN_COUNT 16
-uint8_t adc1_sequencer[ADC0_CHAN_COUNT] = {
-	 0, 30, 1, 30,   2, 30,  3, 30,
-	4, 30, 5, 30,  6, 30,  7, 30
-//	 4, 30, 15, 30,   7, 30,  6, 30,
-//	12, 30, 13, 30,  14, 30,  5, 30
+uint8_t adc0_sequencer[ADC0_CHAN_COUNT] = {
+	 4, 30, 15, 30,   7, 30,  6, 30,
+	12, 30, 13, 30,  14, 30,  5, 30
 };
-uint8_t adc0_sequencer[ADC1_CHAN_COUNT] = {
-	30,  0, 30,  2,  30,  3, 30,  4,
-	30,  4, 30,  5,  30,  6, 30,  7,
-//	30,  6, 30,  7,  30,  0 ,30,  3
-//	30,  6, 30,  7,  30,  0 ,30,  3
+uint8_t adc1_sequencer[ADC1_CHAN_COUNT] = {
+	30,  9, 30,  8,  30,  7 ,30,  6,
+	30,  4, 30,  5,  30,  0 ,30,  3
 };
 
 volatile uint16_t adc0_results[8][ADC0_CHAN_COUNT];
@@ -109,7 +105,7 @@ volatile uint16_t adc1_results_prev[8][ADC0_CHAN_COUNT];
  */
 #define ADC_CALIBRATE(idx)\
 	ADC##idx##_SC2 = 0x0; \
-	ADC##idx##_CFG1	= ADC_CFG1_ADIV(8) | ADC_CFG1_MODE(2) \
+	ADC##idx##_CFG1	= ADC_CFG1_ADIV(8) | ADC_CFG1_MODE(1) \
 			| ADC_CFG1_ADLSMP | ADC_CFG1_ADICLK(3); \
 \
 	ADC##idx##_CFG2	= ADC_CFG2_MUXSEL | ADC_CFG2_ADACKEN \
@@ -136,7 +132,7 @@ volatile uint16_t adc1_results_prev[8][ADC0_CHAN_COUNT];
  * SC2 = internal Vref (=1)
 */
 #define ADC_SETUP(mod)\
-	ADC##mod##_CFG1 = ADC_CFG1_ADIV(1) | ADC_CFG1_MODE(2) | ADC_CFG1_ADICLK(1) /*| ADC_CFG1_ADLSMP*/ ;\
+	ADC##mod##_CFG1 = ADC_CFG1_ADIV(1) | ADC_CFG1_MODE(1) | ADC_CFG1_ADICLK(1) /*| ADC_CFG1_ADLSMP*/ ;\
 	ADC##mod##_CFG2 	= ADC_CFG2_MUXSEL | ADC_CFG2_ADACKEN \
 			| ADC_CFG2_ADHSC | ADC_CFG2_ADLSTS(2); \
 	ADC##mod##_SC3 = 0u; \
@@ -187,6 +183,7 @@ inline void Scan_setup()
 // Main Detection Loop
 inline uint8_t Scan_loop()
 {
+	return 0;
 	for (uint8_t i = 0; i < 8; i++)
 	{
 		Matrix_sense(1);
@@ -319,7 +316,7 @@ void cliFunc_T( char* args )
 {
 	// Test the scan loop (at max speed or general debugging)
 	print( NL );
-	for (uint32_t j = 0; j < 100000; j++)
+	for (uint32_t j = 0; j < 1; j++)
 	{
 		for (uint8_t i = 0; i < 8; i++)
 		{
@@ -330,16 +327,16 @@ void cliFunc_T( char* args )
 				ADC0_SC1A = adc0_sequencer[k];
 				ADC1_SC1A = adc1_sequencer[k];
 				while (!(ADC0_SC1A && ADC_SC1_COCO)){};
-				adc0_results[i][k] = (uint16_t)ADC0_RA >> 1;
+				adc0_results[i][k] = (uint16_t)ADC0_RA;
 				while (!(ADC1_SC1A && ADC_SC1_COCO)){};
-				adc1_results[i][k] = (uint16_t)ADC1_RA >> 1;
+				adc1_results[i][k] = (uint16_t)ADC1_RA;
 				delayMicroseconds(3);
 			}
 			Matrix_sense(0);
 			Matrix_strobe(i, 0);
 			delayMicroseconds(3); // Give it time to settle down
 		}
-		//cliFunc_ADCPrint("");
+		cliFunc_ADCPrint("");
 		if (j % 1000 == 0)
 		{
 			print ( ".");
@@ -353,20 +350,26 @@ void cliFunc_ADCPrint( char* args )
 	print( NL );
 	for (uint8_t j=0; j < 8; j++)
 	{
-		for (uint8_t i=0; i < ADC0_CHAN_COUNT; i+=2)
+		for (uint8_t i=0; i < ADC0_CHAN_COUNT; i++)
 		{
 			if (adc0_results[j][i] - adc0_results_prev[j][i] < 0)
-				print("!");
+			{
+				print("-");
+				printInt16(adc0_results_prev[j][i] - adc0_results[j][i]);
+			}
 			else
 				printInt16(adc0_results[j][i] - adc0_results_prev[j][i]);
 			adc0_results_prev[j][i] = adc0_results[j][i];
 			print (" ");
 		}
-		print (" | ");
-		for (uint8_t i=1; i < ADC1_CHAN_COUNT; i+=2)
+		print ("| ");
+		for (uint8_t i=0; i < ADC1_CHAN_COUNT; i++)
 		{
 			if (adc1_results[j][i] - adc1_results_prev[j][i] < 0)
-				print("!");
+			{
+				print("-");
+				printInt16(adc1_results_prev[j][i] - adc1_results[j][i]);
+			}
 			else
 				printInt16(adc1_results[j][i] - adc1_results_prev[j][i]);
 			adc1_results_prev[j][i] = adc1_results[j][i];
