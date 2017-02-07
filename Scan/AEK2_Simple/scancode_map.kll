@@ -22,9 +22,9 @@ S0xA : U"F9";
 S0xB : U"F10";
 S0xC : U"F11";
 S0xD : U"F12";
-S0xE : U"F13";
-S0xF : U"F14";
-S0x10 : U"F15";
+S0xE : U"PrintScreen";
+S0xF : U"ScrollLock";
+S0x10 : U"Pause";
 
 
 
