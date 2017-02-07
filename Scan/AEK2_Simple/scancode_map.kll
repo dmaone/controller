@@ -1,12 +1,12 @@
 Name = MD1;
 Version = 0.3;
-Author = "HaaTa (Jacob Alexander) 2014-2015";
+Author = "DMA";
 KLL = 0.3c;
 
-DebounceThrottleDiv = 2;
+flashModeEnabled = 1;
 
 # Modified Date
-Date = 2017-02-02;
+Date = 2017-02-06;
 
 S0x0 : U"Esc";
 
