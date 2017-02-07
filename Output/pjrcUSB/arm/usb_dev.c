@@ -1132,7 +1132,7 @@ void usb_rx_memory( usb_packet_t *packet )
 }
 
 // Call whenever there's an action that may wake the host device
-void usb_resume()
+uint8_t usb_resume()
 {
 	// If we have been sleeping, try to wake up host
 	if ( usb_dev_sleep && usb_configured() )
@@ -1151,8 +1151,11 @@ void usb_resume()
 		#else
 		warn_print("Host Resume Disabled");
 		#endif
+
+		return 1;
 	}
 
+	return 0;
 }
 
 void usb_tx( uint32_t endpoint, usb_packet_t *packet )
@@ -1265,6 +1268,14 @@ restart:
 			#endif
 
 		}
+
+		// SOF tokens are used for keepalive, consider the system awake when we're receiving them
+		if ( usb_dev_sleep )
+		{
+			Output_update_usb_current( *usb_bMaxPower * 2 );
+			usb_dev_sleep = 0;
+		}
+
 		USB0_ISTAT = USB_INTEN_SOFTOKEN;
 	}
 
